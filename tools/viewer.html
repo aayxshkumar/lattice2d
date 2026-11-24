@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>lattice2d viewer</title>
+<style>
+  :root { --bg: #111418; --fg: #d8dde3; --muted: #7d8794; --dyn: #6aa9ff; --static: #59616b; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 14px system-ui, sans-serif; }
+  header { display: flex; gap: 12px; align-items: center; padding: 10px 16px; flex-wrap: wrap; }
+  canvas { display: block; width: 100%; height: calc(100vh - 56px); }
+  input[type=range] { flex: 1; min-width: 160px; }
+  .muted { color: var(--muted); }
+</style>
+</head>
+<body>
+<header>
+  <input type="file" id="file" accept=".json">
+  <button id="play" disabled>Play</button>
+  <input type="range" id="scrub" min="0" max="0" value="0" disabled>
+  <span id="info" class="muted">Load a trace from lattice_sim --trace</span>
+</header>
+<canvas id="c"></canvas>
+<script>
+// Offline replay of an lattice_sim trace: {bodies:[{static, circle|poly}], frames:[[x,y,a,...]], dt}.
+const canvas = document.getElementById('c'), ctx = canvas.getContext('2d');
+const scrub = document.getElementById('scrub'), play = document.getElementById('play'), info = document.getElementById('info');
+let trace = null, frame = 0, playing = false, view = null, last = 0;
+
+function fitView() {
+  // Bounds over all frames, ignoring very large static bodies (the ground).
+  let lo = [Infinity, Infinity], hi = [-Infinity, -Infinity];
+  trace.frames.forEach(f => trace.bodies.forEach((b, i) => {
+    if (b.static) return;
+    const x = f[3 * i], y = f[3 * i + 1];
+    lo = [Math.min(lo[0], x), Math.min(lo[1], y)]; hi = [Math.max(hi[0], x), Math.max(hi[1], y)];
+  }));
+  lo[1] = Math.min(lo[1], -1);
+  const pad = 2, w = hi[0] - lo[0] + 2 * pad, h = hi[1] - lo[1] + 2 * pad;
+  view = { x0: lo[0] - pad, y0: lo[1] - pad, w, h };
+}
+
+function draw() {
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = canvas.clientWidth * dpr; canvas.height = canvas.clientHeight * dpr;
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  if (!trace) return;
+  const s = Math.min(canvas.width / view.w, canvas.height / view.h);
+  ctx.setTransform(s, 0, 0, -s, -view.x0 * s, canvas.height + view.y0 * s);
+  ctx.lineWidth = 2.5 * (window.devicePixelRatio || 1) / s;
+  const f = trace.frames[frame];
+  trace.bodies.forEach((b, i) => {
+    const x = f[3 * i], y = f[3 * i + 1], a = f[3 * i + 2];
+    ctx.save(); ctx.translate(x, y); ctx.rotate(a);
+    ctx.strokeStyle = b.static ? getComputedStyle(document.body).getPropertyValue('--static') : getComputedStyle(document.body).getPropertyValue('--dyn');
+    ctx.beginPath();
+    if (b.circle !== undefined) { ctx.arc(0, 0, b.circle, 0, 2 * Math.PI); ctx.moveTo(0, 0); ctx.lineTo(b.circle, 0); }
+    else { b.poly.forEach((v, k) => k ? ctx.lineTo(v[0], v[1]) : ctx.moveTo(v[0], v[1])); ctx.closePath(); }
+    ctx.stroke(); ctx.restore();
+  });
+  info.textContent = `frame ${frame + 1}/${trace.frames.length}  t = ${(frame * trace.dt).toFixed(2)} s  ${trace.bodies.length} bodies`;
+}
+
+function tick(t) {
+  if (playing && t - last >= trace.dt * 1000) {
+    last = t;
+    frame = (frame + 1) % trace.frames.length;
+    scrub.value = frame;
+    draw();
+  }
+  requestAnimationFrame(tick);
+}
+
+document.getElementById('file').addEventListener('change', e => {
+  const r = new FileReader();
+  r.onload = () => {
+    trace = JSON.parse(r.result); frame = 0; fitView();
+    scrub.max = trace.frames.length - 1; scrub.disabled = false; play.disabled = false; draw();
+  };
+  r.readAsText(e.target.files[0]);
+});
+play.addEventListener('click', () => { playing = !playing; play.textContent = playing ? 'Pause' : 'Play'; });
+scrub.addEventListener('input', () => { frame = +scrub.value; draw(); });
+window.addEventListener('resize', draw);
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>
